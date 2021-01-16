@@ -10,7 +10,7 @@ amount_allocated <- allocations %>% count(Code) #%>% select(n) %>% sum()
 amount_with_data <- data %>% count(Code) #%>% select(n) %>% sum()
 
 # 2.
-fraction_residential <- sum(data$Code == 1 & (data[47] == 1 | data[48] == 1 | data[56] == 1 | data[57] == 1, na.rm = TRUE) / amount_with_data$n[1]
+fraction_residential <- sum(data$Code == 1 & (data[47] == 1 | data[48] == 1 | data[56] == 1 | data[57] == 1), na.rm = TRUE) / amount_with_data$n[1]
 fraction_sme <- sum(data$Code == 2 & data[173] == 1, na.rm = TRUE) / amount_with_data$n[2]
 fraction_other <- sum(data$Code == 3 & (data[47] == 1 | data[48] == 1 | data[56] == 1 | data[57] == 1), na.rm = TRUE) / amount_with_data$n[3]
 
