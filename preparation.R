@@ -7,10 +7,10 @@ library(tibble)
 library(stringr)
 
 # Read csv files
-data <- read_csv("data/data_RES_SME_profiles_20090714_20101220.csv")
-allocations <- read_csv("data/allocations.csv")
-residentials <- read_csv("data/Smart meters Residential pre-trial survey data.csv")
-SME <- read_csv("data/Smart meters SME pre-trial survey data.csv")
+data <- read_csv("../data/data_RES_SME_profiles_20090714_20101220.csv")
+allocations <- read_csv("../data/allocations.csv")
+residentials <- read_csv("../data/Smart meters Residential pre-trial survey data.csv")
+SME <- read_csv("../data/Smart meters SME pre-trial survey data.csv")
 
 # Convert string to timestamp
 data$timestamp <- ymd_hms(data$timestamp)
@@ -26,9 +26,13 @@ data_collapsed <- data_filter %>%
                   as.data.frame() %>%
                   tibble::rownames_to_column()
 
+data_filter <- data_filter %>% dplyr::select(-one_of("col"))
+
 # Give meaningful names
 colnames(data_collapsed) <- c("ID", "y_consum")
 rownames(data_collapsed) <- NULL
+
+colnames(data_filter) <- c(stringr::str_sub(colnames(data_filter)[1:(length(data_filter) - 1)], 2, 5), "timestamp")
 
 # Remove chars from IDs
 data_collapsed$ID <- as.numeric(stringr::str_sub(data_collapsed$ID, 2, 5))
@@ -40,3 +44,4 @@ data_collapsed_merged <- dplyr::right_join(allocations, data_collapsed) %>%
 
 # Write csv
 write_csv(data_collapsed_merged, "~/workspace/DAIS/data/data_RES_SME_profiles_collapsed_merged.csv")
+write_csv(data_filter, "../data/data_RES_SME_profiles_filter.csv")
