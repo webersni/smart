@@ -1,8 +1,13 @@
+# DAIS bonus project winter term 2020/2021
+# By Kevin Kohler and Nicolas Webersinke
+
 # Install packages
 # install.packages("readr", "dplyr", "ggplot2", "lmtest", "fastDummies", "car", "purr", "dbscan", "class", "nnet", "psych")
 
 library(readr)
 library(dplyr)
+library(tibble)
+library(stringr)
 library(ggplot2)
 library(lubridate)
 library(scales)
@@ -16,11 +21,57 @@ library(class)
 library(nnet)
 library(psych)
 
-# Initialize
+# Prepare raw data
+
+# Read csv files
+data <- read_csv("data_RES_SME_profiles_20090714_20101220.csv")
+allocations <- read_csv("allocations.csv")
+residentials <- read_csv("Smart meters Residential pre-trial survey data.csv")
+SME <- read_csv("Smart meters SME pre-trial survey data.csv")
+
+# Convert string to timestamp
+data$timestamp <- ymd_hms(data$timestamp)
+
+# Filter time period
+data_filter <- dplyr::filter(data, between(timestamp, ymd_hms("2009-08-01 00:00:00"), ymd_hms("2010-07-31 23:59:59")))
+
+# Collapse 30 min intervals to yearly data
+data_collapsed <- data_filter %>%
+  dplyr::summarise(across(where(is.numeric), ~ sum(.x))) %>% 
+  dplyr::select(-one_of("col")) %>%
+  t() %>%
+  as.data.frame() %>%
+  tibble::rownames_to_column()
+
+data_filter <- data_filter %>% dplyr::select(-one_of("col"))
+
+# Give meaningful names
+colnames(data_collapsed) <- c("ID", "y_consum")
+rownames(data_collapsed) <- NULL
+
+colnames(data_filter) <- c(stringr::str_sub(colnames(data_filter)[1:(length(data_filter) - 1)], 2, 5), "timestamp")
+
+# Remove chars from IDs
+data_collapsed$ID <- as.numeric(stringr::str_sub(data_collapsed$ID, 2, 5))
+
+# Join consumption data with survey data and keep only IDs with consumption data available
+data_collapsed_merged <- dplyr::right_join(allocations, data_collapsed) %>%
+  dplyr::left_join(residentials) %>%
+  dplyr::left_join(SME)
+
+# Write csv
+write_csv(data_collapsed_merged, "data_RES_SME_profiles_collapsed_merged.csv")
+write_csv(data_filter, "data_RES_SME_profiles_filter.csv")
+
+
+### End of preparation ###
+
+
+# Initialize analysis data
 # Load files
-data <- read_csv("../data/data_RES_SME_profiles_collapsed_merged.csv")
-allocations <- read_csv("../data/allocations.csv")
-data_large <- read_csv("../data/data_RES_SME_profiles_filter.csv")
+data <- read_csv("data_RES_SME_profiles_collapsed_merged.csv")
+allocations <- read_csv("allocations.csv")
+data_large <- read_csv("data_RES_SME_profiles_filter.csv")
 
 # Convert timestamp string to real timestamp
 data_large$timestamp <- ymd_hms(data_large$timestamp)
@@ -628,6 +679,7 @@ summary(model)
 bptest(model)
 coeftest(model, vcov = vcovHC(model, type = "HC0"))
 
+# Get tumble_dryer information
 data$tumble_dryer <- as.numeric(data[87] == 2 | data[87] == 3 | data[87] == 4)
 
 df_regression <- data.frame(data[data$Code == 1,]$y_consum, data[data$Code == 1, 46], data[data$Code == 1,]$residential_electric_heating, data[data$Code == 1,]$tumble_dryer)
@@ -651,6 +703,7 @@ coeftest(model, vcov = vcovHC(model, type = "HC0"))
 
 # 3.4.8
 
+# Try out regression model to check VIFs
 df_regression <- data.frame(data[data$Code == 1,]$y_consum, data[data$Code == 1,][46], data[data$Code == 1,]$home_floor_area)
 colnames(df_regression) <- c("consumption", "bedrooms", "floor_area")
 model <- lm(consumption ~ bedrooms + floor_area, data = df_regression, na.action = na.exclude)
@@ -673,7 +726,6 @@ selected_clustering <- which(data$Code == 1 & data$home_floor_area < quantile_ar
 df_clustering <- na.omit(data.frame(scale(data[selected_clustering,]$y_consum), scale(data[selected_clustering,]$home_floor_area)))
 colnames(df_clustering) <- c("consumption", "floor_area")
 
-#df_clustering <- data.frame(scale(df_clustering))
 cluster <- kmeans(df_clustering, centers = 3)
 df_clustering$cluster <- as.factor(cluster$cluster)
 
@@ -730,9 +782,9 @@ ggsave("dbscan_cluster.png",
        height=4,
        dpi="print")
 
-# 2.
+# 3.5.2
 
-# Metrics
+# Metrics for performance evaluation
 # Accuracy
 accuracy <- function(x) sum(diag(tab)) / sum(tab) * 100
 
@@ -743,7 +795,6 @@ weighted_recall <- function(x) sum(diag(x) / colSums(x) * colSums(x) / sum(x)) *
 weighted_precision <- function(x) sum(na.fill(diag(x) / rowSums(x), 0) * colSums(x) / sum(x)) * 100
 
 # F1
-
 weighted_f1_score <- function(x) 2 * (weighted_precision(x) * weighted_recall(x)) / (weighted_precision(x) + weighted_recall(x))
 
 # Clean age
@@ -751,13 +802,14 @@ weighted_f1_score <- function(x) 2 * (weighted_precision(x) * weighted_recall(x)
 data[which(data[8] == 7 & !is.na(data[8])), 8] <- NA
 
 # KNN
-
-df_classification <- na.omit(data.frame(data[data$Code == 1,]$household_size, scale(data[data$Code == 1,]$y_consum), scale(data[data$Code == 1,][46]), scale(data[data$Code == 1, 8])))
+df_classification <- na.omit(data.frame(data[data$Code == 1,]$household_size, scale(data[data$Code == 1,]$y_consum), scale(data[data$Code == 1, 46]), scale(data[data$Code == 1, 8])))
 colnames(df_classification) <- c("household_size", "consumption", "bedrooms", "age")
 
+# Remove outliers and classes with too less occurences
 df_classification <- df_classification[!(df_classification$household_size > 6 | df_classification$consumption > 20000),]
 rownames(df_classification) <- NULL
 
+# Divide in training and test dataset
 sample_size <- floor(0.67 * nrow(df_classification))
 
 train_index <- sample(seq_len(nrow(df_classification)), size = sample_size)
@@ -768,23 +820,28 @@ test_data <- df_classification[-train_index, -1]
 train_labels <- df_classification[train_index, 1]
 test_labels <- df_classification[-train_index, 1]
 
+# Run knn for test dataset
 pred <- knn(train_data, test_data, cl = train_labels, k = 11)
 
+# Store predictions and actual labels in table
 tab <- table(pred, test_labels)
 
+# Get metrics
 weighted_f1_score(tab)
 
 cohen.kappa(tab)
 
-# Softmax regression
+# Multinorm regression
 age_dummies <- dummy_cols(data[data$Code == 1, 8], remove_first_dummy = TRUE, ignore_na = TRUE, remove_selected_columns = TRUE)
 
 df_classification <- na.omit(data.frame(data[data$Code == 1,]$household_size, data[data$Code == 1,]$y_consum, data[data$Code == 1,][46], age_dummies))
 colnames(df_classification) <- c("household_size", "consumption", "bedrooms", "age_2", "age_3", "age_4", "age_5", "age_6")
 
+# Remove outliers and classes with too less occurences
 df_classification <- df_classification[!(df_classification$household_size > 6 | df_classification$consumption > 20000),]
 rownames(df_classification) <- NULL
 
+# Divide in training and test dataset
 sample_size <- floor(0.67 * nrow(df_classification))
 
 train_index <- sample(seq_len(nrow(df_classification)), size = sample_size)
@@ -792,7 +849,8 @@ train_index <- sample(seq_len(nrow(df_classification)), size = sample_size)
 train_data <- df_classification[train_index,]
 test_data <- df_classification[-train_index,]
 
-model <- multinom(household_size ~ . -1, data = train_data)
+# Run multinorm regression
+model <- multinom(household_size ~ ., data = train_data)
 
 summary(model)
 
@@ -800,19 +858,23 @@ pred <- predict(model, test_data[,-1])
 
 tab <- table(pred = pred, real = test_data$household_size)
 
+# Get metrics
+weighted_recall(tab)
+weighted_precision(tab)
 weighted_f1_score(tab)
-
+accuracy(tab)
 cohen.kappa(tab)
 
-# 3.
+# 3.5.3
 # Combine residential and SME area data
 data$home_sme_area <- ifelse(is.na(data$home_floor_area) & !is.na(data$premise_area), data$premise_area, data$home_floor_area)
 
+# Build classification dataframe and normalize features
 df_classification <- na.omit(data.frame(data[data$Code == 1 | data$Code == 2,]$Code, scale(data[data$Code == 1 | data$Code == 2,]$y_consum), scale(data[data$Code == 1 | data$Code == 2,]$home_sme_area)))
 colnames(df_classification) <- c("Code", "consumption", "area")
-
 rownames(df_classification) <- NULL
 
+# Divide in training and test dataset
 sample_size <- floor(0.67 * nrow(df_classification))
 
 train_index <- sample(seq_len(nrow(df_classification)), size = sample_size)
@@ -823,18 +885,21 @@ test_data <- df_classification[-train_index, -1]
 train_labels <- df_classification[train_index, 1]
 test_labels <- df_classification[-train_index, 1]
 
-pred <- knn(train_data, test_data, cl = train_labels, k = 11)
+# Run knn
+pred <- knn(train_data, test_data, cl = train_labels, k = 9)
 
 tab <- table(pred, test_labels)
 
-accuracy(tab)
-
+# Get metrics
+weighted_recall(tab)
+weighted_precision(tab)
 weighted_f1_score(tab)
-
+accuracy(tab)
 cohen.kappa(tab)
 
+# Classify new observations
 df_to_classify <- na.omit(data.frame(scale(data[data$Code == 3,]$y_consum), scale(data[data$Code == 3,]$home_sme_area)))
 colnames(df_to_classify) <- c("consumption", "area")
 
+# Predict if household or SME
 pred <- knn(df_classification[, -1], df_to_classify, cl = df_classification[, 1], k = 11)
-pred
