@@ -18,8 +18,8 @@ library(car)
 library(purrr)
 library(dbscan)
 library(class)
-library(nnet)
-library(psych)
+library(e1071)
+library(caret)
 
 # Prepare raw data
 
@@ -704,7 +704,7 @@ coeftest(model, vcov = vcovHC(model, type = "HC0"))
 # 3.4.8
 
 # Try out regression model to check VIFs
-df_regression <- data.frame(data[data$Code == 1,]$y_consum, data[data$Code == 1,][46], data[data$Code == 1,]$home_floor_area)
+df_regression <- data.frame(data[data$Code == 1,]$y_consum, data[data$Code == 1, 46], data[data$Code == 1,]$home_floor_area)
 colnames(df_regression) <- c("consumption", "bedrooms", "floor_area")
 model <- lm(consumption ~ bedrooms + floor_area, data = df_regression, na.action = na.exclude)
 summary(model)
@@ -784,62 +784,22 @@ ggsave("dbscan_cluster.png",
 
 # 3.5.2
 
-# Metrics for performance evaluation
-# Accuracy
-accuracy <- function(x) sum(diag(tab)) / sum(tab) * 100
+# Pull washing machine data for encoding
+washing_machine_loads <- pull(data[data$Code == 1, 106])
+# Set more than 3 loads to category 3
+washing_machine_loads[which(washing_machine_loads > 3 & !is.na(washing_machine_loads))] <- 3
 
-# Recall
-weighted_recall <- function(x) sum(diag(x) / colSums(x) * colSums(x) / sum(x)) * 100
+# One-hot encode categorial variables
+washing_machine_dummies <- dummy_cols(washing_machine_loads, remove_first_dummy = FALSE, ignore_na = TRUE, remove_selected_columns = TRUE)
 
-# Precision
-weighted_precision <- function(x) sum(na.fill(diag(x) / rowSums(x), 0) * colSums(x) / sum(x)) * 100
-
-# F1
-weighted_f1_score <- function(x) 2 * (weighted_precision(x) * weighted_recall(x)) / (weighted_precision(x) + weighted_recall(x))
-
-# Clean age
-# Set refused to NA
-data[which(data[8] == 7 & !is.na(data[8])), 8] <- NA
-
-# KNN
-df_classification <- na.omit(data.frame(data[data$Code == 1,]$household_size, scale(data[data$Code == 1,]$y_consum), scale(data[data$Code == 1, 46]), scale(data[data$Code == 1, 8])))
-colnames(df_classification) <- c("household_size", "consumption", "bedrooms", "age")
+df_classification <- na.omit(data.frame(data[data$Code == 1,]$household_size, data[data$Code == 1,]$y_consum, data[data$Code == 1, 46], washing_machine_dummies))
+colnames(df_classification) <- c("household_size", "consumption", "bedrooms", "washing_1", "washing_2", "washing_3")
 
 # Remove outliers and classes with too less occurences
-df_classification <- df_classification[!(df_classification$household_size > 6 | df_classification$consumption > 20000),]
+df_classification <- df_classification[which(df_classification$household_size < 6 & df_classification$consumption < 20000),]
 rownames(df_classification) <- NULL
 
-# Divide in training and test dataset
-sample_size <- floor(0.67 * nrow(df_classification))
-
-train_index <- sample(seq_len(nrow(df_classification)), size = sample_size)
-
-train_data <- df_classification[train_index, -1]
-test_data <- df_classification[-train_index, -1]
-
-train_labels <- df_classification[train_index, 1]
-test_labels <- df_classification[-train_index, 1]
-
-# Run knn for test dataset
-pred <- knn(train_data, test_data, cl = train_labels, k = 11)
-
-# Store predictions and actual labels in table
-tab <- table(pred, test_labels)
-
-# Get metrics
-weighted_f1_score(tab)
-
-cohen.kappa(tab)
-
-# Multinorm regression
-age_dummies <- dummy_cols(data[data$Code == 1, 8], remove_first_dummy = TRUE, ignore_na = TRUE, remove_selected_columns = TRUE)
-
-df_classification <- na.omit(data.frame(data[data$Code == 1,]$household_size, data[data$Code == 1,]$y_consum, data[data$Code == 1,][46], age_dummies))
-colnames(df_classification) <- c("household_size", "consumption", "bedrooms", "age_2", "age_3", "age_4", "age_5", "age_6")
-
-# Remove outliers and classes with too less occurences
-df_classification <- df_classification[!(df_classification$household_size > 6 | df_classification$consumption > 20000),]
-rownames(df_classification) <- NULL
+df_classification$household_size <- as.factor(df_classification$household_size)
 
 # Divide in training and test dataset
 sample_size <- floor(0.67 * nrow(df_classification))
@@ -849,21 +809,14 @@ train_index <- sample(seq_len(nrow(df_classification)), size = sample_size)
 train_data <- df_classification[train_index,]
 test_data <- df_classification[-train_index,]
 
-# Run multinorm regression
-model <- multinom(household_size ~ ., data = train_data)
+# SVM training
+svm_model <- svm(household_size ~ ., data=train_data, scale = TRUE, gamma=0.25, cost=20)
 
-summary(model)
-
-pred <- predict(model, test_data[,-1])
-
-tab <- table(pred = pred, real = test_data$household_size)
+# SVM testing
+pred <- predict(svm_model, test_data[,-1])
 
 # Get metrics
-weighted_recall(tab)
-weighted_precision(tab)
-weighted_f1_score(tab)
-accuracy(tab)
-cohen.kappa(tab)
+confusionMatrix(data = pred, reference = test_data$household_size)
 
 # 3.5.3
 # Combine residential and SME area data
@@ -888,14 +841,8 @@ test_labels <- df_classification[-train_index, 1]
 # Run knn
 pred <- knn(train_data, test_data, cl = train_labels, k = 9)
 
-tab <- table(pred, test_labels)
-
 # Get metrics
-weighted_recall(tab)
-weighted_precision(tab)
-weighted_f1_score(tab)
-accuracy(tab)
-cohen.kappa(tab)
+confusionMatrix(data = pred, reference = as.factor(test_labels))
 
 # Classify new observations
 df_to_classify <- na.omit(data.frame(scale(data[data$Code == 3,]$y_consum), scale(data[data$Code == 3,]$home_sme_area)))
