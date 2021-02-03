@@ -822,8 +822,11 @@ confusionMatrix(data = pred, reference = test_data$household_size)
 # Combine residential and SME area data
 data$home_sme_area <- ifelse(is.na(data$home_floor_area) & !is.na(data$premise_area), data$premise_area, data$home_floor_area)
 
+# Remove outliers since knn is sensitive to these
+data_index <- which((data$Code == 1 & data$y_consum < 20000) | data$Code == 2)
+
 # Build classification dataframe and normalize features
-df_classification <- na.omit(data.frame(data[data$Code == 1 | data$Code == 2,]$Code, scale(data[data$Code == 1 | data$Code == 2,]$y_consum), scale(data[data$Code == 1 | data$Code == 2,]$home_sme_area)))
+df_classification <- na.omit(data.frame(data[data_index,]$Code, scale(data[data_index,]$y_consum), scale(data[data_index,]$home_sme_area)))
 colnames(df_classification) <- c("Code", "consumption", "area")
 rownames(df_classification) <- NULL
 
@@ -839,7 +842,7 @@ train_labels <- df_classification[train_index, 1]
 test_labels <- df_classification[-train_index, 1]
 
 # Run knn
-pred <- knn(train_data, test_data, cl = train_labels, k = 9)
+pred <- knn(train_data, test_data, cl = train_labels, k = 11)
 
 # Get metrics
 confusionMatrix(data = pred, reference = as.factor(test_labels))
